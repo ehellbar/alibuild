@@ -662,6 +662,35 @@ class Boto3RemoteSync:
                              tarball)
     tar_exists = self._s3_key_exists(tar_path)
     link_exists = self._s3_key_exists(link_path)
+    
+    if spec["package"] == "ONNXRuntime":
+      debug("Uploading tarball and symlinks for %s %s-%s (%s) to S3",
+            spec["package"], spec["version"], spec["revision"], spec["hash"])
+
+      # Upload the smaller file first, so that any parallel uploads are more
+      # likely to find it and fail.
+      self.s3.put_object(Bucket=self.writeStore, Key=link_path,
+                        Body=os.readlink(os.path.join(self.workdir, link_path))
+                                .lstrip("./").encode("utf-8"))
+
+      # Second, upload dist symlinks. These should be in place before the main
+      # tarball, to avoid races in the publisher.
+      start_time = time.time()
+      for link_dir, symlinks in dist_symlinks.items():
+        for link_key, hash_path in symlinks:
+          self.s3.put_object(Bucket=self.writeStore,
+                            Key=link_key,
+                            Body=os.fsencode(hash_path),
+                            ACL="public-read",
+                            WebsiteRedirectLocation=hash_path)
+        debug("Uploaded %d dist symlinks to S3 from %s",
+              len(symlinks), link_dir)
+      end_time = time.time()
+      debug("Uploaded %d dist symlinks in %.2f seconds",
+            sum(len(symlinks) for _, symlinks in dist_symlinks.items()),
+            end_time - start_time)
+
+    
     if tar_exists and link_exists:
       debug("%s exists on S3 already, not uploading", tarball)
       return
